@@ -1,5 +1,3 @@
-// DO NOT USE THIS
-
 import {
   getRoundUpForYear,
   getPoundUpForYear,
@@ -17,6 +15,21 @@ const TaxRate = 0.25;
 const NoSpendDayPerMonth = 5;
 const NetflixMonthlyPlan = 12.99;
 
+/**
+ * Calculate projected pension using closed-form mathematical formula (no loops/recursion)
+ * 
+ * Mathematical approach:
+ * - Net growth factor per year: g = (1 + growthRate) × (1 - totalFee)
+ * - Contribution growth factor: s = (1 + SavingGrowthRate)
+ * - Final pension = P₀ × g^n + C₀ × s × g^n × ((1 - (s/g)^n) / (1 - s/g))
+ * 
+ * Where:
+ * - P₀ = initial pension
+ * - n = number of years
+ * - C₀ = base savings (first year contribution divided by s)
+ * - g = net growth factor
+ * - s = savings growth factor
+ */
 export function calculateProjectedPension(
   currentChestPension,
   currentAge,
@@ -67,54 +80,68 @@ export function calculateProjectedPension(
   }
 
   const totalFee = fundFee + platformFee;
-  let pension = currentChestPension;
-  // const logger = [];
+  const numberOfYears = retirementAge - currentAge;
   
-  for (let age = currentAge; age < retirementAge; age++) {
-    const pensionDrawdown = 0;
-    const annualGrowth = getRound(pension * growthRate);
-    const fee = getRound((pension + pensionDrawdown + annualGrowth) * totalFee);
-    const chestPensionContribution = getSavings(currentAge, age, withChest, savingsRule);
-    
-    const closingPension =
-      pension + pensionDrawdown + annualGrowth - fee + chestPensionContribution;
-
-    // logger.push({
-    //   age,
-    //   pension,
-    //   pensionDrawdown,
-    //   annualGrowth,
-    //   fee,
-    //   closingPension,
-    //   chestPensionContribution,
-    // });
-
-    pension = closingPension;
-    
+  // If no years to compound, return current pension
+  if (numberOfYears <= 0) {
+    return currentChestPension;
   }
 
-  // console.table(logger, [
-  //   'age',
-  //   'pension',
-  //   'pensionDrawdown',
-  //   'annualGrowth',
-  //   'fee',
-  //   'chestPensionContribution',
-  //   'closingPension',
-  // ]);
-
-  return pension;
+  // Net growth factor per year: pension grows and then fees are deducted
+  // Each year: pension_new = pension_old * (1 + growthRate) * (1 - totalFee) + contribution
+  const netGrowthFactor = (1 + growthRate) * (1 - totalFee);
+  
+  // Contribution growth factor
+  const savingsGrowthFactor = 1 + SavingGrowthRate;
+  
+  // Calculate base savings (annual contribution)
+  const baseSavings = getBaseSavings(withChest, savingsRule);
+  
+  // Calculate pension growth without contributions
+  const pensionGrowth = currentChestPension * Math.pow(netGrowthFactor, numberOfYears);
+  
+  // Calculate contribution component using geometric series formula
+  let contributionComponent = 0;
+  
+  if (baseSavings > 0) {
+    // Contributions start at baseSavings * savingsGrowthFactor^1 in year 0
+    // and grow to baseSavings * savingsGrowthFactor^n in year n-1
+    // Each contribution also grows with netGrowthFactor for remaining years
+    
+    // Using geometric series sum formula:
+    // Sum = C₀ × s × g^n × ((1 - (s/g)^n) / (1 - s/g))
+    // where s = savingsGrowthFactor, g = netGrowthFactor
+    
+    const ratio = savingsGrowthFactor / netGrowthFactor;
+    
+    if (Math.abs(ratio - 1) < 1e-10) {
+      // Special case: when s ≈ g, use arithmetic series
+      contributionComponent = baseSavings * savingsGrowthFactor * numberOfYears * Math.pow(netGrowthFactor, numberOfYears - 1);
+    } else {
+      // General case: geometric series
+      const geometricSum = (1 - Math.pow(ratio, numberOfYears)) / (1 - ratio);
+      contributionComponent = baseSavings * savingsGrowthFactor * Math.pow(netGrowthFactor, numberOfYears) * geometricSum;
+    }
+  }
+  
+  const finalPension = pensionGrowth + contributionComponent;
+  
+  return getRound(finalPension);
 }
 
-function getSavings(
-  currentAge,
-  forAge,
+function getBaseSavings(
   withChest,
   savingsRule = {
     roundUp: true,
     poundUp: true,
-    monthlySaving: true,
-    noSpendSaving: true,
+    monthlySaving: {
+      enabled: true,
+      savingsPerMonth: 10,
+    },
+    noSpendSaving: {
+      enabled: true,
+      savingsPerDay: 10,
+    },
     chestflixSaving: true,
   }
 ) {
@@ -154,14 +181,14 @@ function getSavings(
     ? getChestflixSavingForYear(NetflixMonthlyPlan, TaxRate)
     : 0;
 
-  return getRound(totalSavings * Math.pow(1 + SavingGrowthRate, forAge - currentAge + 1));
+  return totalSavings;
 }
 
 function getRound(num) {
   return parseFloat(Number(num).toFixed(2));
 }
 
-
 function isAllSavingsRuleDisabled(savingsRule){
   return  !(savingsRule.roundUp || savingsRule.poundUp || savingsRule.monthlySaving.enabled || savingsRule.noSpendSaving.enabled || savingsRule.chestflixSaving)
 }
+
